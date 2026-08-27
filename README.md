@@ -46,6 +46,7 @@ claude mcp add --scope user wordpress -- node ~/mcp/wp-mcp/server.mjs
 | `wp_themes` | list / install / activate / delete |
 | `wp_file_list/read/write/delete` | direct files under `wp-content` (themes, plugins, uploads) |
 | `wp_file_restore` | undo a file write from its automatic `.wpmcp-bak` backup — falls back to `rescue.php` if the site is fatally broken |
+| `wp_cache_purge` | purge known page caches (Jetpack Boost, WP Super Cache / W3TC, LiteSpeed) after changes |
 | `wp_api` | raw REST escape hatch (`/wp/v2/settings`, `/wc/v3/orders`, menus, users…) |
 
 ## Safety notes
@@ -59,3 +60,8 @@ claude mcp add --scope user wordpress -- node ~/mcp/wp-mcp/server.mjs
 - Some shared hosts strip the `Authorization` header; the server also sends
   `X-WPMCP-Token`, which survives everywhere tested.
 - On multisite, plugin/theme installs need a super-admin's token.
+- HTML passed to `wp_content_create`/`wp_content_update` is wrapped in a
+  raw-HTML block by default, so WordPress's autop filter can't reformat
+  structured markup (pass `autop_safe: false` to opt out).
+- All requests send a browser-like User-Agent — some shared-host WAFs
+  reject non-browser agents with an opaque 403.

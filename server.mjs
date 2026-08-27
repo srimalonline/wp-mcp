@@ -18,6 +18,10 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SITES_FILE = path.join(HERE, "sites.json");
 
+// Some shared-host WAFs (ModSecurity and friends) reject non-browser user
+// agents with an opaque 403 that looks exactly like an auth failure.
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) wp-mcp/1.0";
+
 /* ------------------------------------------------------------ site config */
 
 function loadSites() {
@@ -61,6 +65,7 @@ async function api(siteName, method, restPath, { params, body, rawBody, headers 
     headers: {
       "X-WPMCP-Token": site.token,
       "Authorization": `Bearer ${site.token}`,
+      "User-Agent": UA,
       ...headers,
     },
   };
@@ -103,6 +108,16 @@ const restBase = (type) => {
   const map = { post: "posts", page: "pages", media: "media" };
   return map[type] || type;
 };
+
+/**
+ * WordPress runs classic (non-block) content through wpautop, which injects
+ * <p> tags at line breaks and can shred structured markup — an <a> spanning
+ * lines, a heading inside an anchor. Wrapping the HTML in a raw-HTML block
+ * makes WordPress render it verbatim. Content that already contains block
+ * markup is left untouched.
+ */
+const blockSafe = (html) =>
+  html && !html.includes("<!-- wp:") ? `<!-- wp:html -->\n${html}\n<!-- /wp:html -->` : html;
 
 const briefContent = (item) => ({
   id: item.id,
@@ -259,8 +274,10 @@ server.tool(
     slug: z.string().optional(),
     excerpt: z.string().optional(),
     extra: z.string().optional().describe("JSON object of extra REST fields: categories, tags, meta, parent, template, date…"),
+    autop_safe: z.boolean().optional().describe("Wrap HTML content in a raw-HTML block so WordPress cannot reformat it (default true; ignored when content already has block markup)"),
   },
-  run(async ({ site, type = "posts", title, content, status = "draft", slug, excerpt, extra }) => {
+  run(async ({ site, type = "posts", title, content, status = "draft", slug, excerpt, extra, autop_safe = true }) => {
+    if (autop_safe && content) content = blockSafe(content);
     const body = { title, content, status, slug, excerpt, ...(extra ? JSON.parse(extra) : {}) };
     for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
     const d = await api(site, "POST", `/wp/v2/${restBase(type)}`, { body });
@@ -281,8 +298,10 @@ server.tool(
     slug: z.string().optional(),
     excerpt: z.string().optional(),
     extra: z.string().optional().describe("JSON object of extra REST fields"),
+    autop_safe: z.boolean().optional().describe("Wrap HTML content in a raw-HTML block so WordPress cannot reformat it (default true; ignored when content already has block markup)"),
   },
-  run(async ({ site, type = "posts", id, extra, ...fields }) => {
+  run(async ({ site, type = "posts", id, extra, autop_safe = true, ...fields }) => {
+    if (autop_safe && fields.content) fields.content = blockSafe(fields.content);
     const body = { ...fields, ...(extra ? JSON.parse(extra) : {}) };
     for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
     if (!Object.keys(body).length) throw new Error("Nothing to update — pass at least one field.");
@@ -469,13 +488,32 @@ server.tool(
       if (!s.rescueToken) throw new Error(`Bridge unreachable (${e.message}) and no rescue token cached — restore via hosting file manager.`);
       const res = await fetch(`${s.url}/wp-content/plugins/wp-mcp-connector/rescue.php`, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "User-Agent": UA },
         body: new URLSearchParams({ token: s.rescueToken, path: p }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(`Rescue failed: ${data?.error || res.status}`);
       return { ...data, via: "rescue endpoint (WordPress was unreachable)" };
     }
+  })
+);
+
+server.tool(
+  "wp_cache_purge",
+  "Purge known page-cache folders on the site (Jetpack Boost, WP Super Cache / W3TC, LiteSpeed). Run after file or content changes when the live page still shows stale output.",
+  { site: z.string() },
+  run(async ({ site }) => {
+    const candidates = ["boost-cache/cache", "cache", "litespeed"];
+    const results = {};
+    for (const p of candidates) {
+      try {
+        await bridge(site, "POST", "/fs/delete", { body: { path: p, recursive: true } });
+        results[p] = "purged";
+      } catch (e) {
+        results[p] = e.status === 404 ? "not present" : `skipped: ${e.message}`;
+      }
+    }
+    return results;
   })
 );
 
