@@ -1,5 +1,7 @@
 # wp-mcp
 
+![wp-mcp](assets/thumbnail.png)
+
 MCP server that turns Claude Code into a full WordPress operator — content, media,
 plugins, themes, and **direct theme-file editing** — on any site, including shared
 hosting with no SSH/WP-CLI.
