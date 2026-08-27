@@ -1,0 +1,11 @@
+{
+  "name": "wp-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for operating WordPress sites via the WP MCP Connector plugin",
+  "type": "module",
+  "main": "server.mjs",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "zod": "^3.24.1"
+  }
+}
